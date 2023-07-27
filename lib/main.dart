@@ -1,5 +1,40 @@
+
+import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'loginscreen.dart';
+
+class ExpenseDatabase {
+  final DatabaseReference _databaseReference =
+  FirebaseDatabase.instance.ref();
+  final String _userId;
+
+  ExpenseDatabase(this._userId);
+
+  void addExpense(Expense expense) {
+    final newExpenseRef = _databaseReference
+        .child('users')
+        .child(_userId)
+        .child('expenses')
+        .push();
+    newExpenseRef.set({
+      'category': expense.category,
+      'amount': expense.amount,
+    });
+  }
+
+  void removeExpense(String expenseKey) {
+    _databaseReference
+        .child('users')
+        .child(_userId)
+        .child('expenses')
+        .child(expenseKey)
+        .remove();
+  }
+}
+
 
 class ExpenseProvider with ChangeNotifier {
   double _total = 0;
@@ -8,15 +43,21 @@ class ExpenseProvider with ChangeNotifier {
   double get total => _total;
   List<Expense> get expenses => _expenses;
 
+  final ExpenseDatabase _expenseDatabase;
+
+  ExpenseProvider(this._expenseDatabase);
+
   void addExpense(Expense expense) {
     _expenses.add(expense);
     _total += expense.amount;
+    _expenseDatabase.addExpense(expense); // Update Firebase Database
     notifyListeners();
   }
 
-  void removeExpense(Expense expense) {
+  void removeExpense(Expense expense, String expenseKey) {
     _expenses.remove(expense);
     _total -= expense.amount;
+    _expenseDatabase.removeExpense(expenseKey); // Update Firebase Database
     notifyListeners();
   }
 }
@@ -31,18 +72,42 @@ class Expense {
 class BudgetTrackerApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
-    return ChangeNotifierProvider(
-      create: (_) => ExpenseProvider(),
-      child: MaterialApp(
-        title: 'Budget Tracker',
-        home: HomeScreen(),
-        routes: {
-          '/expense': (context) => ExpenseScreen(),
-        },
-      ),
+    return StreamBuilder<User?>(
+      stream: FirebaseAuth.instance.authStateChanges(),
+      builder: (context, AsyncSnapshot<User?> snapshot) {
+        if (snapshot.hasData && snapshot.data != null) {
+          // Get the user ID
+          final userId = snapshot.data!.uid;
+
+          // Create an instance of ExpenseDatabase
+          final expenseDatabase = ExpenseDatabase(userId);
+
+          return ChangeNotifierProvider(
+            create: (_) => ExpenseProvider(expenseDatabase),
+            child: MaterialApp(
+              debugShowCheckedModeBanner: false,
+              title: 'Budget Tracker',
+              home: HomeScreen(),
+              routes: {
+                '/expense': (context) => ExpenseScreen(),
+              },
+            ),
+          );
+        } else if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Center(
+            child: CircularProgressIndicator(),
+          );
+        }
+        return MaterialApp(
+          debugShowCheckedModeBanner: false,
+          title: 'Budget Tracker',
+          home: LoginScreen(),
+        );
+      },
     );
   }
 }
+
 
 class HomeScreen extends StatelessWidget {
   @override
@@ -65,12 +130,12 @@ class HomeScreen extends StatelessWidget {
       ),
       body: Container(
         decoration: BoxDecoration(
-        gradient: const RadialGradient(
-          colors: [Colors.cyanAccent, Colors.lightBlue],
-          radius: 1,
-          tileMode: TileMode.clamp,
+          gradient: const RadialGradient(
+            colors: [Colors.cyanAccent, Colors.lightBlue],
+            radius: 1,
+            tileMode: TileMode.clamp,
+          ),
         ),
-    ),
         padding: EdgeInsets.all(16.0),
         child: Center(
           child: Column(
@@ -83,10 +148,10 @@ class HomeScreen extends StatelessWidget {
               Text(
                 'Welcome Back User!',
                 style: TextStyle(
-                  fontSize: 30,
-                  color: Colors.black,
-                  fontFamily: 'Lumanosimo',
-                  fontWeight: FontWeight.bold
+                    fontSize: 30,
+                    color: Colors.black,
+                    fontFamily: 'Lumanosimo',
+                    fontWeight: FontWeight.bold
                 ),
               ),
               Card(
@@ -111,12 +176,21 @@ class HomeScreen extends StatelessWidget {
                           ),
                         ),
                       ),
+
                     ],
                   ),
                   trailing: Icon(Icons.arrow_forward),
                   onTap: () {
                     Navigator.pushNamed(context, '/expense');
                   },
+                ),
+              ),
+
+              ElevatedButton(
+                onPressed: () {
+                  FirebaseAuth.instance.signOut();},
+                child: const Text(
+                    'Logout'
                 ),
               ),
             ],
@@ -131,6 +205,7 @@ class ExpenseScreen extends StatelessWidget {
   final TextEditingController categoryController = TextEditingController();
   final TextEditingController amountController = TextEditingController();
 
+
   void addExpense(BuildContext context) {
     final category = categoryController.text.trim();
     double amount = double.tryParse(amountController.text.trim()) ?? 0.0;
@@ -144,8 +219,8 @@ class ExpenseScreen extends StatelessWidget {
     }
   }
 
-  void deleteExpense(BuildContext context, Expense expense) {
-    Provider.of<ExpenseProvider>(context, listen: false).removeExpense(expense);
+  void deleteExpense(BuildContext context, Expense expense, String expenseKey) {
+    Provider.of<ExpenseProvider>(context, listen: false).removeExpense(expense, expenseKey); // Pass both the expense and the key
   }
 
   Future<void> openDialog(BuildContext context) async {
@@ -155,11 +230,11 @@ class ExpenseScreen extends StatelessWidget {
         //contentPadding: EdgeInsets.all(20.0),
         title: Center(
             child:Text('New Entry',
-        style:TextStyle(
-          color: Colors.pink,
-          fontSize: 28,
-            fontFamily: 'Lumanosimo'
-        ))),
+                style:TextStyle(
+                    color: Colors.pink,
+                    fontSize: 28,
+                    fontFamily: 'Lumanosimo'
+                ))),
 
         content: Container(
           padding: EdgeInsets.all(16.0),
@@ -171,10 +246,10 @@ class ExpenseScreen extends StatelessWidget {
                 decoration: InputDecoration(
                   labelText: 'Category',
                   labelStyle: TextStyle(
-                    color: Colors.purple,
-                    fontSize: 20,
-                    fontStyle: FontStyle.italic,
-                    fontFamily: 'Montserrat'
+                      color: Colors.purple,
+                      fontSize: 20,
+                      fontStyle: FontStyle.italic,
+                      fontFamily: 'Montserrat'
                   ),
                   enabledBorder: OutlineInputBorder(
                     borderSide: BorderSide(color: Colors.black,width:3.0),
@@ -190,10 +265,10 @@ class ExpenseScreen extends StatelessWidget {
                 decoration: InputDecoration(
                   labelText: 'Amount',
                   labelStyle: TextStyle(
-                    color: Colors.purple,
-                    fontSize: 18,
-                    fontStyle: FontStyle.italic,
-                    fontFamily: 'Montserrat'
+                      color: Colors.purple,
+                      fontSize: 18,
+                      fontStyle: FontStyle.italic,
+                      fontFamily: 'Montserrat'
                   ),
                   enabledBorder: OutlineInputBorder(
                     borderSide: BorderSide(color: Colors.black,width:3.0),
@@ -273,13 +348,15 @@ class ExpenseScreen extends StatelessWidget {
                   itemCount: expenseProvider.expenses.length,
                   itemBuilder: (context, index) {
                     final expense = expenseProvider.expenses[index];
+                    final expenseKey = ''; // Get the expense key here from your Firebase Database
                     return ExpenseCard(
                       expense: expense,
-                      onDelete: () => deleteExpense(context, expense),
+                      onDelete: () => deleteExpense(context, expense, expenseKey), // Pass both the expense and the key
                     );
                   },
                 ),
               ),
+
             ],
           ),
         ),
@@ -290,6 +367,7 @@ class ExpenseScreen extends StatelessWidget {
         },
         child: Icon(Icons.add),
       ),
+
     );
   }
 }
@@ -337,6 +415,10 @@ class ExpenseCard extends StatelessWidget {
   }
 }
 
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp(
+
+  );
   runApp(BudgetTrackerApp());
 }
